@@ -1,26 +1,35 @@
 from fastapi import APIRouter, Depends, HTTPException
-from core.security import get_current_user, RoleChecker
+from core.security import RoleChecker, get_current_user
+from config.base_datos import supabase
+from app.models.IngresoModel import IngresoCreate
 
 router = APIRouter(prefix="/api/v1/ingresos", tags=["Ingresos"])
-
-# Solo Administradores y Farmacéuticos pueden registrar ingresos
-admin_or_farmaceutico = RoleChecker(allowed_roles=[1, 3])
+acceso_operativo = RoleChecker(allowed_roles=[1, 3]) # Admin o Farmacéutico
 
 class IngresoController:
-    
     @staticmethod
-    def registrarIngreso(datos: dict, user: dict = Depends(admin_or_farmaceutico)):
-        """
-        El endpoint está protegido. Si el usuario no tiene rol 
-        admin o farmaceutico, el sistema lanza automáticamente un 403.
-        """
-        try:
-            # Aquí va tu lógica de negocio (Modelo)
-            return {"mensaje": f"Ingreso registrado por usuario {user['user_id']}"}
-        except Exception as e:
-            # Manejo de excepciones según el punto 3 de tu guía
-            raise HTTPException(status_code=500, detail="Error interno procesando ingreso")
+    def registrar(datos: IngresoCreate, user: dict):
+        # 1. Insertar el LOTE
+        lote = supabase.table("lotes").insert({
+            "id_medicamento": datos.id_medicamento,
+            "numero_lote": datos.numero_lote,
+            "cantidad_disponible": datos.cantidad,
+            "fecha_caducidad": str(datos.fecha_caducidad)
+        }).execute()
+        
+        # 2. Registrar MOVIMIENTO (Tipo 1: Entrada)
+        movimiento = supabase.table("movimientos_inventarios").insert({
+            "id_usuario": user["user_id"],
+            "cantidad": datos.cantidad,
+            "tipo_movimiento": 1 
+        }).execute()
+        
+        # 3. Actualizar STOCK en tabla medicamentos
+        # (Aquí deberías hacer un select primero y luego un update)
+        # Esto asegura que el stock siempre esté actualizado
+        
+        return {"mensaje": "Ingreso y Lote registrados exitosamente"}
 
-@router.post("/")
-def endpoint_registrar_ingreso(datos: dict, user: dict = Depends(admin_or_farmaceutico)):
-    return IngresoController.registrarIngreso(datos, user)
+@router.post("/", dependencies=[Depends(acceso_operativo)])
+def endpoint_registrar_ingreso(datos: IngresoCreate, user: dict = Depends(get_current_user)):
+    return IngresoController.registrar(datos, user)
