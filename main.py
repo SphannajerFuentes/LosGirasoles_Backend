@@ -5,6 +5,7 @@ from app.controllers.AuthController import router as auth_router # Corregido el 
 from app.controllers.AdminController import router as admin_router
 from app.controllers.MedicamentoController import router as medic_router
 from app.controllers.OrdenCompraController import router as order_router
+from app.controllers.IncidenciaController import router as incidencia_router
 
 app = FastAPI(title="API Logística Los Girasoles", version="1.0.0")
 
@@ -20,3 +21,4 @@ app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(medic_router)
 app.include_router(order_router)
+app.include_router(incidencia_router)
