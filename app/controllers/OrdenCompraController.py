@@ -89,9 +89,33 @@ class OrdenCompraController:
 
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error en la recepción de la orden: {str(e)}")
-
+    @staticmethod
+    def listar_ordenes():
+        try:
+            # Traemos las órdenes incluyendo el nombre del proveedor mediante un join
+            # Asegúrate de que en Supabase tengas la relación configurada o el select correcto
+            response = supabase.table("ordenes_compras") \
+                .select("id, id_proveedor, fecha_emision, estado_orden, proveedores(nombre)") \
+                .execute()
+            
+            # Formateamos un poco la respuesta para que sea fácil de consumir en el frontend
+            datos = [
+                {
+                    "id": o["id"],
+                    "proveedor_nombre": o["proveedores"]["nombre"] if o["proveedores"] else "N/A",
+                    "proveedor_id": o["id_proveedor"],
+                    "estado": o["estado_orden"]
+                } for o in response.data
+            ]
+            return datos
+        except Exception as e:
+            raise HTTPException(status_code=500, detail="Error al obtener órdenes")
 
 # --- ENDPOINTS ---
+
+@router.get("/", dependencies=[Depends(acceso_recepcion)])
+def obtener_ordenes():
+    return OrdenCompraController.listar_ordenes()
 
 @router.post("/", dependencies=[Depends(solo_admin)])
 def crear_orden(payload: OrdenCompraCreate, user: dict = Depends(get_current_user)):
