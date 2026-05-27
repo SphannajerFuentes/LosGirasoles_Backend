@@ -17,6 +17,12 @@ class AdminController:
             "rol": datos.rol
         }).execute()
         return {"mensaje": "Usuario creado por el administrador"}
+    
+    @staticmethod
+    def listar_usuarios():
+        # Excluimos la contraseña por seguridad
+        res = supabase.table("usuarios").select("id, nombre, rol, estado").execute()
+        return res.data
 
     @staticmethod
     def crear_proveedor(datos: ProveedorCreate):
@@ -26,6 +32,12 @@ class AdminController:
             "telefono": datos.telefono
         }).execute()
         return {"mensaje": "Proveedor registrado exitosamente"}
+    
+    @staticmethod
+    def listar_proveedores():
+        # Consulta a Supabase para obtener todos los proveedores
+        res = supabase.table("proveedores").select("*").eq("estado", 1).execute()
+        return res.data
 
 # Endpoints protegidos
 @router.post("/usuarios", dependencies=[Depends(solo_admin)])
@@ -35,3 +47,11 @@ def registrar_usuario(payload: UsuarioCreate):
 @router.post("/proveedores", dependencies=[Depends(solo_admin)])
 def registrar_proveedor(payload: ProveedorCreate):
     return AdminController.crear_proveedor(payload)
+
+@router.get("/proveedores", dependencies=[Depends(solo_admin)])
+def obtener_proveedores():
+    return AdminController.listar_proveedores()
+
+@router.get("/usuarios", dependencies=[Depends(solo_admin)])
+def obtener_usuarios():
+    return AdminController.listar_usuarios()

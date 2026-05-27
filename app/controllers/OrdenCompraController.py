@@ -46,59 +46,101 @@ class OrdenCompraController:
             raise HTTPException(status_code=500, detail="Error al generar la orden de compra")
 
     @staticmethod
-    def recepcionar_orden(id_orden: int, datos: RecepcionOrdenCreate, user: dict):
+    def recepcionar_orden(id_orden: int, datos: dict, user: dict): # Usamos dict para simplificar el payload flexible
+        operaciones_realizadas = {"lotes": [], "movimientos": [], "incidencias": []}
+        
         try:
-            # 1. Actualizar estado de la Orden de Compra a 2 (Recibido)
+            # 1. Obtener ID del proveedor de esta orden para la incidencia
+            orden_info = supabase.table("ordenes_compras").select("id_proveedor").eq("id", id_orden).single().execute()
+            if not orden_info.data:
+                raise Exception("Orden no encontrada.")
+            id_proveedor = orden_info.data["id_proveedor"]
+
+            hubo_incidencia = False
+            todo_cero = True
+
+            # 2. Procesar cada detalle
+            for detalle in datos["detalles"]:
+                cant_pedida = detalle["cantidad_pedida"]
+                cant_recibida = detalle["cantidad_recibida"]
+                diferencia = cant_pedida - cant_recibida
+
+                # A. Si se recibió algo bueno, entra al inventario
+                if cant_recibida > 0:
+                    todo_cero = False
+                    # Insertar Lote
+                    lote_res = supabase.table("lotes").insert({
+                        "id_medicamento": detalle["id_medicamento"],
+                        "numero_lote": detalle["numero_lote"],
+                        "cantidad_disponible": cant_recibida,
+                        "fecha_caducidad": str(detalle["fecha_caducidad"]),
+                        "estado_fisico": 1,
+                        "semaforo": 1
+                    }).execute()
+                    operaciones_realizadas["lotes"].append(lote_res.data[0]["id"])
+
+                    # Registrar Movimiento
+                    mov_res = supabase.table("movimientos_inventarios").insert({
+                        "id_usuario": user["user_id"],
+                        "cantidad": cant_recibida,
+                        "tipo_movimiento": 1 # Entrada
+                    }).execute()
+                    operaciones_realizadas["movimientos"].append(mov_res.data[0]["id"])
+
+                    # Actualizar Stock Global
+                    med = supabase.table("medicamentos").select("stock_actual").eq("id", detalle["id_medicamento"]).single().execute()
+                    nuevo_stock = med.data["stock_actual"] + cant_recibida
+                    supabase.table("medicamentos").update({"stock_actual": nuevo_stock}).eq("id", detalle["id_medicamento"]).execute()
+
+                # B. Si hubo faltante o producto dañado, generar Incidencia Automática
+                if diferencia > 0:
+                    hubo_incidencia = True
+                    motivo = detalle.get("tipo_incidencia", 2) # Por defecto 2 (Faltante) si no envían nada
+                    desc = f"Discrepancia en recepción: Se pidieron {cant_pedida}, se recibieron {cant_recibida}. Diferencia: {diferencia} uds."
+                    
+                    inc_res = supabase.table("incidencias").insert({
+                        "id_orden_compra": id_orden,
+                        "id_proveedor": id_proveedor,
+                        "descripcion": desc,
+                        "tipo": motivo,
+                        "estado_incidencia": 1
+                    }).execute()
+                    operaciones_realizadas["incidencias"].append(inc_res.data[0]["id"])
+
+            # 3. Determinar el estado final de la orden
+            nuevo_estado_orden = 4 if todo_cero else (3 if hubo_incidencia else 2)
+
             supabase.table("ordenes_compras").update({
-                "estado_orden": 2,
+                "estado_orden": nuevo_estado_orden,
                 "fecha_entrega": str(date.today())
             }).eq("id", id_orden).execute()
 
-            # 2. Procesar cada medicamento que está llegando físicamente
-            for detalle in datos.detalles:
-                
-                # A. Insertar el Lote en la BD (Semaforo 1: Verde por defecto)
-                lote = supabase.table("lotes").insert({
-                    "id_medicamento": detalle.id_medicamento,
-                    "numero_lote": detalle.numero_lote,
-                    "cantidad_disponible": detalle.cantidad_recibida,
-                    "fecha_caducidad": str(detalle.fecha_caducidad),
-                    "estado_fisico": 1, # 1: Apto
-                    "semaforo": 1       # 1: Verde
-                }).execute()
-
-                # B. Registrar el movimiento en el Inventario (1: Entrada)
-                supabase.table("movimientos_inventarios").insert({
-                    "id_usuario": user["user_id"], # Quién recibe la mercadería (Almacenero o Admin)
-                    "cantidad": detalle.cantidad_recibida,
-                    "tipo_movimiento": 1 # 1: Entrada
-                }).execute()
-
-                # C. Actualizar el stock actual en la tabla de medicamentos
-                medicamento_data = supabase.table("medicamentos").select("stock_actual").eq("id", detalle.id_medicamento).single().execute()
-                
-                if medicamento_data.data:
-                    stock_previo = medicamento_data.data["stock_actual"] or 0
-                    nuevo_stock = stock_previo + detalle.cantidad_recibida
-                    
-                    supabase.table("medicamentos").update({
-                        "stock_actual": nuevo_stock
-                    }).eq("id", detalle.id_medicamento).execute()
-
-            return {"mensaje": f"Orden de compra N° {id_orden} recepcionada correctamente. Stock y lotes actualizados."}
+            return {
+                "mensaje": "Recepción procesada.", 
+                "estado_final": nuevo_estado_orden,
+                "incidencias_generadas": hubo_incidencia
+            }
 
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error en la recepción de la orden: {str(e)}")
+            # Lógica de reversión (Rollback manual)
+            for mov_id in operaciones_realizadas["movimientos"]:
+                supabase.table("movimientos_inventarios").delete().eq("id", mov_id).execute()
+            for lote_id in operaciones_realizadas["lotes"]:
+                supabase.table("lotes").delete().eq("id", lote_id).execute()
+            for inc_id in operaciones_realizadas["incidencias"]:
+                supabase.table("incidencias").delete().eq("id", inc_id).execute()
+            
+            raise HTTPException(status_code=500, detail=f"Fallo crítico: {str(e)}")
+        
     @staticmethod
     def listar_ordenes():
         try:
-            # Traemos las órdenes incluyendo el nombre del proveedor mediante un join
-            # Asegúrate de que en Supabase tengas la relación configurada o el select correcto
+            # AÑADIMOS .eq("estado_orden", 1) AQUÍ para que solo traiga las pendientes
             response = supabase.table("ordenes_compras") \
                 .select("id, id_proveedor, fecha_emision, estado_orden, proveedores(nombre)") \
+                .eq("estado_orden", 1) \
                 .execute()
             
-            # Formateamos un poco la respuesta para que sea fácil de consumir en el frontend
             datos = [
                 {
                     "id": o["id"],
@@ -111,17 +153,47 @@ class OrdenCompraController:
         except Exception as e:
             raise HTTPException(status_code=500, detail="Error al obtener órdenes")
 
+    @staticmethod
+    def listar_detalle(id_orden: int):
+        try:
+            # Traemos los detalles unidos con la información del medicamento
+            # Nota: Asegúrate de que el nombre de la relación 'medicamentos' 
+            # en el select coincida con cómo está en tu configuración de Supabase
+            response = supabase.table("detalles_ordenes_compras") \
+                .select("*, medicamentos(nombre)") \
+                .eq("id_orden_compra", id_orden) \
+                .execute()
+            
+            # Formateamos la respuesta para el frontend
+            datos = [
+                {
+                    "id_medicamento": d["id_medicamento"],
+                    "medicamento_nombre": d["medicamentos"]["nombre"] if d["medicamentos"] else "Desconocido",
+                    "cantidad": d["cantidad"],
+                    "precio_unitario": d["precio_unitario"]
+                } for d in response.data
+            ]
+            return datos
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error al obtener detalle de orden: {str(e)}") 
+        
+         
+
 # --- ENDPOINTS ---
 
 @router.get("/", dependencies=[Depends(acceso_recepcion)])
-def obtener_ordenes():
+def obtener_ordenes(estado: int = 1): # Por defecto trae las pendientes
     return OrdenCompraController.listar_ordenes()
 
 @router.post("/", dependencies=[Depends(solo_admin)])
 def crear_orden(payload: OrdenCompraCreate, user: dict = Depends(get_current_user)):
     return OrdenCompraController.generar_orden(payload, user)
 
-# NUEVO ENDPOINT: Cambia el estado de la orden y registra los lotes entrantes
+# CORRECCIÓN: Cambiamos 'RecepcionOrdenCreate' por 'dict' para aceptar el payload flexible con incidencias
 @router.put("/{id_orden}/recepcionar", dependencies=[Depends(acceso_recepcion)])
-def recepcionar_orden_compra(id_orden: int, payload: RecepcionOrdenCreate, user: dict = Depends(get_current_user)):
+def recepcionar_orden_compra(id_orden: int, payload: dict, user: dict = Depends(get_current_user)):
     return OrdenCompraController.recepcionar_orden(id_orden, payload, user)
+
+@router.get("/{id_orden}/detalle", dependencies=[Depends(acceso_recepcion)])
+def obtener_detalle_orden(id_orden: int):
+    return OrdenCompraController.listar_detalle(id_orden)

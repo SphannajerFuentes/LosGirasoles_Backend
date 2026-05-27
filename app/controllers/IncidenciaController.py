@@ -32,6 +32,48 @@ class IncidenciaController:
             }
         except Exception as e:
             raise HTTPException(status_code=500, detail="Error al reportar la incidencia")
+        
+    @staticmethod
+    def listar_incidencias():
+        try:
+            # Traemos las incidencias con información de la orden y el proveedor
+            response = supabase.table("incidencias") \
+                .select("id, id_orden_compra, descripcion, tipo, estado_incidencia, creado_el, proveedores(nombre)") \
+                .order("creado_el", desc=True) \
+                .execute()
+            
+            datos = [
+                {
+                    "id": i["id"],
+                    "orden_id": i["id_orden_compra"],
+                    "proveedor": i["proveedores"]["nombre"] if i["proveedores"] else "N/A",
+                    "descripcion": i["descripcion"],
+                    "tipo": i["tipo"],
+                    "estado": i["estado_incidencia"],
+                    "fecha": i["creado_el"]
+                } for i in response.data
+            ]
+            return datos
+        except Exception as e:
+            raise HTTPException(status_code=500, detail="Error al listar incidencias")
+
+    @staticmethod
+    def resolver_incidencia(id_incidencia: int):
+        try:
+            # Cambia el estado a "Resuelta" (estado_incidencia = 2)
+            supabase.table("incidencias").update({"estado_incidencia": 2}).eq("id", id_incidencia).execute()
+            return {"mensaje": "Incidencia marcada como resuelta."}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail="Error al resolver la incidencia")
+
+# --- ENDPOINTS ---
+@router.get("/", dependencies=[Depends(acceso_reporte)])
+def obtener_incidencias():
+    return IncidenciaController.listar_incidencias()
+
+@router.put("/{id_incidencia}/resolver", dependencies=[Depends(acceso_reporte)])
+def resolver(id_incidencia: int):
+    return IncidenciaController.resolver_incidencia(id_incidencia)
 
 @router.post("/", dependencies=[Depends(acceso_reporte)])
 def reportar_incidencia(payload: IncidenciaCreate, user: dict = Depends(get_current_user)):
