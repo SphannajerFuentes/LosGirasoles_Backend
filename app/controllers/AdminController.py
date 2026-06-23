@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
-from core.security import RoleChecker
-from core.base_controller import BaseController
-from core.excepciones import ReglaNegocioError
+from app.core.security import RoleChecker
+from app.core.base_controller import BaseController
+from app.core.excepciones import ReglaNegocioError
 from app.models.GestionModel import UsuarioCreate, ProveedorCreate
 import bcrypt
 

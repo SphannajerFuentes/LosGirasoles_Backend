@@ -1,6 +1,6 @@
 from fastapi import APIRouter
-from core.base_controller import BaseController
-from core.excepciones import ReglaNegocioError
+from app.core.base_controller import BaseController
+from app.core.excepciones import ReglaNegocioError
 from app.models.AuthModel import RegistroInput, LoginInput
 import bcrypt
 import base64
