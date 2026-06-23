@@ -1,6 +1,6 @@
 from fastapi import Depends, Header
 from config.base_datos import supabase
-from core.excepciones import AutorizacionError
+from app.core.excepciones import AutorizacionError
 import base64
 
 def get_current_user(authorization: str = Header(...)):
