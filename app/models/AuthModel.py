@@ -1,9 +1,9 @@
 from pydantic import BaseModel, Field
 
 class RegistroInput(BaseModel):
-    nombre: str
-    contrasena: str
-    rol: int  # 1: Admin, 2: Almacenero, 3: Farmacéutico
+    nombre: str = Field(..., min_length=3)
+    contrasena: str = Field(..., min_length=6)
+    rol: int
 
 class LoginInput(BaseModel):
     nombre: str
