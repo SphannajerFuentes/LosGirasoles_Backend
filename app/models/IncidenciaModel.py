@@ -1,7 +1,8 @@
-from pydantic import BaseModel, Field
+from pydantic import Field
+from app.models.BaseModel import EntidadBase
 
-class IncidenciaCreate(BaseModel):
+class IncidenciaCreate(EntidadBase):
     id_orden_compra: int
     id_proveedor: int
     descripcion: str 
-    tipo: int # 1: Mercadería Dañada, 2: Discrepancia/Faltante, 3: Retraso
+    tipo: int = Field(..., description="1: Dañada, 2: Faltante, 3: Retraso")
