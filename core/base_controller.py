@@ -1,5 +1,5 @@
-from app.config.base_datos import supabase
-from app.core.excepciones import InventarioException
+from config.base_datos import supabase
+from core.excepciones import InventarioException
 import logging
 
 class BaseController:
