@@ -1,9 +1,8 @@
-from pydantic import BaseModel
 from datetime import date
+from app.models.BaseModel import EntidadBase
 
-class IngresoCreate(BaseModel):
+class IngresoCreate(EntidadBase):
     id_medicamento: int
     numero_lote: str
     cantidad: int
     fecha_caducidad: date
-    # id_usuario vendrá del token (seguridad), no del JSON
