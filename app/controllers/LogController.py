@@ -13,9 +13,37 @@ def obtener_logs(
     current_user: dict = Depends(RoleChecker([1]))
 ):
 
-    respuesta = supabase.table("movimientos_inventarios") \
-        .select("*") \
-        .order("creado_el", desc=True) \
+    respuesta = (
+        supabase
+        .table("movimientos_inventarios")
+        .select(
+            """
+            id,
+            id_usuario,
+            cantidad,
+            tipo_movimiento,
+            motivo_salida,
+            creado_el
+            """
+        )
+        .order("creado_el", desc=True)
         .execute()
+    )
 
-    return respuesta.data
+    logs = []
+
+    for movimiento in respuesta.data:
+
+        logs.append({
+            "usuario": movimiento["id_usuario"],
+            "tipo_movimiento": (
+                "INGRESO"
+                if movimiento["tipo_movimiento"] == 1
+                else "SALIDA"
+            ),
+            "cantidad": movimiento["cantidad"],
+            "motivo": movimiento["motivo_salida"],
+            "fecha": movimiento["creado_el"]
+        })
+
+    return logs
