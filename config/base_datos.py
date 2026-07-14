@@ -12,5 +12,4 @@ key: str = os.environ.get("SUPABASE_KEY")
 if not url or not key:
     raise ValueError("Faltan las credenciales de Supabase en el archivo .env")
 
-# Inicializamos el cliente global que usará todo nuestro backend Completo
 supabase: Client = create_client(url, key)
