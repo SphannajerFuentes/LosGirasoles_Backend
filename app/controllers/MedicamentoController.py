@@ -9,8 +9,40 @@ solo_admin = RoleChecker(allowed_roles=[1])
 class MedicamentoController(BaseController):
     
     def _listar_todos_logica(self):
-        res = self._db.table("medicamentos").select("*").execute()
-        return res.data
+
+        fecha_limite = str(date.today() + timedelta(days=15))
+
+        medicamentos = (
+            self._db.table("medicamentos")
+            .select("*")
+            .execute()
+        )
+
+        resultado = []
+
+        for medicamento in medicamentos.data:
+
+            lotes = (
+                self._db.table("lotes")
+                .select("cantidad_disponible")
+                .eq("id_medicamento", medicamento["id"])
+                .gt("cantidad_disponible", 0)
+                .gt("fecha_caducidad", fecha_limite)
+                .execute()
+            )
+
+            stock_valido = sum(
+                lote["cantidad_disponible"]
+                for lote in lotes.data
+            )
+
+            if stock_valido > 0:
+
+                medicamento["stock_actual"] = stock_valido
+
+                resultado.append(medicamento)
+
+        return resultado
 
     def _registrar_logica(self, datos: MedicamentoCreate):
         self._db.table("medicamentos").insert(datos.dict()).execute()
