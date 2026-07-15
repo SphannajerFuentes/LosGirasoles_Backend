@@ -170,18 +170,40 @@ class OperacionesController(BaseController):
         alertas = []
         meds = self._db.table("medicamentos").select("id, nombre, stock_actual, punto_reorden").execute()
         
-        # REGLA APLICADA: Comprensión de listas iterando con nombres claros
+        # Categoría 1: Stock mínimo
         alertas.extend([
-            {"id": f"stock-{m['id']}", "medicamento": m["nombre"], "tipo": "critico", "mensaje": f"Stock bajo: {m['stock_actual']} uds."}
+            {"id": f"stock-{m['id']}", "medicamento": m["nombre"], "tipo": "critico",
+             "categoria": "stock", "mensaje": f"Stock bajo: {m['stock_actual']} uds."}
             for m in meds.data if m["stock_actual"] <= (m["punto_reorden"] or 10)
-        ])
-        
+        ]) 
+
+        # Categoría 2: Pedidos pendientes
         ordenes = self._db.table("ordenes_compras").select("id").eq("estado_orden", ESTADOS_ORDEN[0]).execute()
         alertas.extend([
-            {"id": f"auto-{o['id']}", "medicamento": "Pedido Pendiente", "tipo": "advertencia", "mensaje": f"Orden de compra N°{o['id']} pendiente."}
-            for o in ordenes.data
+            {"id": f"auto-{o['id']}", "medicamento": "Pedido Pendiente", "tipo": "advertencia",
+             "categoria": "pedido", "mensaje": f"Orden de compra N°{o['id']} pendiente."}
+            for o in ordenes.data 
         ])
-        
+
+        # Categoría 3: Lotes vencidos o por vencer (mismo umbral que el semáforo FEFO)
+        hoy = date.today()
+        lotes = self._db.table("lotes").select(
+            "id, numero_lote, fecha_caducidad, medicamentos(nombre)"
+        ).gt("cantidad_disponible", 0).execute()
+
+        for lote in lotes.data:
+            dias = (date.fromisoformat(lote["fecha_caducidad"]) - hoy).days
+            if dias <= 180:
+                vencido = dias < 0
+                alertas.append({
+                    "id": f"lote-{lote['id']}",
+                    "medicamento": lote["medicamentos"]["nombre"] if lote["medicamentos"] else "N/A",
+                    "lote": lote["numero_lote"],
+                    "tipo": "critico" if (vencido or dias <= 90) else "advertencia",
+                    "categoria": "vencimiento",
+                    "mensaje": "Lote vencido." if vencido else f"Vence en {dias} días."
+                 })    
+
         return alertas
         
     def _obtener_kpis_logica(self):
