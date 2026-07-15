@@ -92,10 +92,10 @@ class OrdenCompraController:
     @staticmethod
     def listar_ordenes():
         try:
-            # Traemos las órdenes incluyendo el nombre del proveedor mediante un join
-            # Asegúrate de que en Supabase tengas la relación configurada o el select correcto
+            # Agregamos .eq("estado_orden", 1) para traer solo las pendientes
             response = supabase.table("ordenes_compras") \
                 .select("id, id_proveedor, fecha_emision, estado_orden, proveedores(nombre)") \
+                .eq("estado_orden", 1) \
                 .execute()
             
             # Formateamos un poco la respuesta para que sea fácil de consumir en el frontend
@@ -110,7 +110,6 @@ class OrdenCompraController:
             return datos
         except Exception as e:
             raise HTTPException(status_code=500, detail="Error al obtener órdenes")
-        
 
     @staticmethod
     def obtener_detalle(id_orden: int):

@@ -5,7 +5,7 @@ class MedicamentoCreate(BaseModel):
     principio_activo: str
     presentacion: str
     precio: float
-    stock_actual: int
+    stock_actual: int = 0
     stock_maximo: int
     stock_minimo: int
     punto_reorden: int

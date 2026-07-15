@@ -18,65 +18,105 @@ ESTADOS_ORDEN = (1, 2)     # 1: Pendiente, 2: Completada
 # REGLA APLICADA: Herencia de BaseController
 class OperacionesController(BaseController):
     
-    # REGLA APLICADA: Encapsulamiento (método protegido con _)
     def _registrar_salida_logica(self, payload: SalidaMedicamentoRequest, current_user: dict):
         detalles_despacho = []
-        
+        medicamentos_validados = {}
+
+        # FASE 1: Validación previa exhaustiva (Evita escrituras si algo va a fallar)
         for item in payload.items:
-            # 1. Obtener datos (Uso de self._db heredado)
             respuesta_medicamento = self._db.table("medicamentos").select(
                 "id, nombre, stock_actual, stock_maximo, punto_reorden"
             ).eq("id", item.medicamento_id).single().execute()
             
             if not respuesta_medicamento.data:
-                # REGLA APLICADA: Excepciones personalizadas centralizadas
                 raise NoEncontradoError(f"Medicamento ID {item.medicamento_id}")
             
             medicamento = respuesta_medicamento.data
             
-            if medicamento["stock_actual"] < item.cantidad:
-                raise ReglaNegocioError(f"Stock insuficiente para {medicamento['nombre']}")
+            fecha_limite = str(date.today() + timedelta(days=15))
+
+            lotes = (
+                self._db.table("lotes")
+                .select("id, cantidad_disponible, fecha_caducidad")
+                .eq("id_medicamento", item.medicamento_id)
+                .gt("cantidad_disponible", 0)
+                .gt("fecha_caducidad", fecha_limite)
+                .order("fecha_caducidad", desc=False)
+                .execute()
+            )
+
+            stock_disponible = sum(
+                lote["cantidad_disponible"]
+                for lote in lotes.data
+            )
+
+            if stock_disponible < item.cantidad:
+                raise ReglaNegocioError(
+                    "No existe stock disponible. Los lotes restantes están próximos a vencer."
+                )
             
-            # 2. Consumir lotes mediante método FEFO
-            lotes_query = self._db.table("lotes").select("id, cantidad_disponible, fecha_caducidad") \
-                .eq("id_medicamento", item.medicamento_id).gt("cantidad_disponible", 0) \
-                .order("fecha_caducidad", desc=False).execute()
+            # Guardamos en memoria para no volver a consultar en la fase de escritura
+            medicamentos_validados[item.medicamento_id] = medicamento
+
+        # FASE 2: Procesamiento y Escritura (FEFO)
+        for item in payload.items:
+            medicamento = medicamentos_validados[item.medicamento_id]
+            
+            # Consumir lotes mediante FEFO (First Expired, First Out)
+            fecha_limite = str(date.today() + timedelta(days=15))
+
+            lotes_query = (
+                self._db.table("lotes")
+                .select("id, cantidad_disponible, fecha_caducidad")
+                .eq("id_medicamento", item.medicamento_id)
+                .gt("cantidad_disponible", 0)
+                .gt("fecha_caducidad", fecha_limite)
+                .order("fecha_caducidad", desc=False)
+                .execute()
+            )
             
             cantidad_por_restar = item.cantidad
-            for lote in lotes_query.data: # REGLA APLICADA: Nombres descriptivos (lote, no 'l')
+            
+            for lote in lotes_query.data:
                 if cantidad_por_restar <= 0: 
                     break
                 
                 stock_lote = lote["cantidad_disponible"]
                 retirado = min(stock_lote, cantidad_por_restar)
+                nuevo_stock_lote = stock_lote - retirado
                 
-                self._db.table("lotes").update({"cantidad_disponible": stock_lote - retirado}).eq("id", lote["id"]).execute()
+                # Actualizar stock del lote
+                self._db.table("lotes").update({"cantidad_disponible": nuevo_stock_lote}).eq("id", lote["id"]).execute()
                 
+                # Registrar movimiento
                 movimiento = self._db.table("movimientos_inventarios").insert({
                     "id_usuario": current_user["user_id"],
                     "cantidad": retirado, 
-                    "tipo_movimiento": TIPOS_MOVIMIENTO[1], # Uso de tupla
-                    "motivo_salida": MOTIVOS_SALIDA[0],     # Uso de tupla
+                    "tipo_movimiento": TIPOS_MOVIMIENTO[1], # 2: Salida
+                    "motivo_salida": MOTIVOS_SALIDA[0],     # 1: Venta
                     "estado": 1
                 }).execute()
                 
+                # Registrar en Kardex
                 self._db.table("kardex").insert({
                     "id_lote": lote["id"], 
                     "id_movimiento_inventario": movimiento.data[0]["id"], 
-                    "saldo_actual": stock_lote - retirado, 
+                    "saldo_actual": nuevo_stock_lote, 
                     "estado": 1
                 }).execute()
                 
                 detalles_despacho.append(MovimientoDetalleResponse(
-                    lote_id=lote["id"], cantidad_retirada=retirado, fecha_caducidad=str(lote["fecha_caducidad"])
+                    lote_id=lote["id"], 
+                    cantidad_retirada=retirado, 
+                    fecha_caducidad=str(lote["fecha_caducidad"])
                 ))
                 cantidad_por_restar -= retirado
             
-            # 3. Actualizar el stock global del medicamento
+            # Actualizar el stock global del medicamento
             nuevo_stock = medicamento["stock_actual"] - item.cantidad
             self._db.table("medicamentos").update({"stock_actual": nuevo_stock}).eq("id", item.medicamento_id).execute()
             
-            # 4. Motor de Reposición Automática Inteligente
+            # Motor de Reposición Automática Inteligente
             limite = medicamento["punto_reorden"] if medicamento["punto_reorden"] is not None else 10
             stock_max = medicamento["stock_maximo"] if medicamento["stock_maximo"] is not None else 100
             
@@ -170,18 +210,40 @@ class OperacionesController(BaseController):
         alertas = []
         meds = self._db.table("medicamentos").select("id, nombre, stock_actual, punto_reorden").execute()
         
-        # REGLA APLICADA: Comprensión de listas iterando con nombres claros
+        # Categoría 1: Stock mínimo
         alertas.extend([
-            {"id": f"stock-{m['id']}", "medicamento": m["nombre"], "tipo": "critico", "mensaje": f"Stock bajo: {m['stock_actual']} uds."}
+            {"id": f"stock-{m['id']}", "medicamento": m["nombre"], "tipo": "critico",
+             "categoria": "stock", "mensaje": f"Stock bajo: {m['stock_actual']} uds."}
             for m in meds.data if m["stock_actual"] <= (m["punto_reorden"] or 10)
-        ])
-        
+        ]) 
+
+        # Categoría 2: Pedidos pendientes
         ordenes = self._db.table("ordenes_compras").select("id").eq("estado_orden", ESTADOS_ORDEN[0]).execute()
         alertas.extend([
-            {"id": f"auto-{o['id']}", "medicamento": "Pedido Pendiente", "tipo": "advertencia", "mensaje": f"Orden de compra N°{o['id']} pendiente."}
-            for o in ordenes.data
+            {"id": f"auto-{o['id']}", "medicamento": "Pedido Pendiente", "tipo": "advertencia",
+             "categoria": "pedido", "mensaje": f"Orden de compra N°{o['id']} pendiente."}
+            for o in ordenes.data 
         ])
-        
+
+        # Categoría 3: Lotes vencidos o por vencer (mismo umbral que el semáforo FEFO)
+        hoy = date.today()
+        lotes = self._db.table("lotes").select(
+            "id, numero_lote, fecha_caducidad, medicamentos(nombre)"
+        ).gt("cantidad_disponible", 0).execute()
+
+        for lote in lotes.data:
+            dias = (date.fromisoformat(lote["fecha_caducidad"]) - hoy).days
+            if dias <= 180:
+                vencido = dias < 0
+                alertas.append({
+                    "id": f"lote-{lote['id']}",
+                    "medicamento": lote["medicamentos"]["nombre"] if lote["medicamentos"] else "N/A",
+                    "lote": lote["numero_lote"],
+                    "tipo": "critico" if (vencido or dias <= 90) else "advertencia",
+                    "categoria": "vencimiento",
+                    "mensaje": "Lote vencido." if vencido else f"Vence en {dias} días."
+                 })    
+
         return alertas
         
     def _obtener_kpis_logica(self):
